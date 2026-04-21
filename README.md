@@ -1,1 +1,1 @@
-game link http://samuelkuzmic.github.io/typing-game/
+game link https://samuelkuzmic.github.io/typing-game/
