@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Quantum Commander - Infinite Descriptive Fleet</title>
+    <style>
+        body { background-color: #000; color: #fff; font-family: 'Consolas', 'Monaco', monospace; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        #commander-panel { flex: 1.2; background: #0a0a0a; padding: 15px; border-right: 2px solid #333; display: flex; flex-direction: column; gap: 15px; }
+        #bot-rack { flex: 1.8; background: #000; padding: 10px; display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 110px; gap: 10px; overflow-y: auto; }
+        #market-panel { flex: 1.5; background: #0d0d0d; padding: 15px; border-left: 2px solid #333; overflow-y: auto; }
+        #balance { color: #00ff00; font-size: 3rem; font-weight: bold; border-bottom: 2px solid #222; padding-bottom: 5px; }
+        #user-typing-zone { background: #111; padding: 15px; border: 1px solid #ff9900; border-radius: 4px; }
+        .active-text { font-size: 1.1rem; line-height: 1.4; min-height: 4em; color: #eee;}
+        .current { background-color: #00ff00; color: #000; }
+        .shop-card { background: #1a1a1a; border: 1px solid #333; padding: 12px; margin-bottom: 10px; border-radius: 4px; }
+        .bot-unit { border: 2px solid #444; background: #050505; padding: 10px; border-radius: 3px; position: relative; }
+        .bot-unit.active-unit { border-color: #00ff00; }
+        .bot-header { color: #00ff00; font-size: 0.7rem; font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #222; margin-bottom: 5px;}
+        .bot-log { font-size: 0.8rem; color: #ff9900; overflow: hidden; white-space: nowrap; }
+        .live-speed-label { font-size: 0.65rem; color: #00ffff; }
+        button { background: #222; border: 1px solid #444; color: #555; padding: 10px; cursor: not-allowed; font-weight: bold; width: 100%; margin-top: 8px; font-size: 0.8rem; text-transform: uppercase; }
+        button.can-afford { background: #005500; border: 1px solid #00ff00; color: #fff; cursor: pointer; }
+        button.can-afford:hover { background: #00ff00; color: #000; }
+        .item-title { color: #00ff00; font-size: 0.9rem; display: block; margin-bottom: 2px; }
+        .desc-text { font-size: 0.7rem; color: #bbb; margin-top: 4px; line-height: 1.3; font-family: 'Segoe UI', sans-serif; }
+        .highlight { color: #00ffff; font-weight: bold; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #333; }
+    </style>
+</head>
+<body>
+
+    <div id="commander-panel">
+        <div id="balance">$0</div>
+        <div id="user-typing-zone">
+            <div style="font-size: 0.5rem; color: #ff9900;">[LOCAL_VAULT_ENCRYPTED]</div>
+            <div id="user-active" class="active-text"></div>
+        </div>
+        <div id="my-upgrades">
+            <h3 style="color:#ff9900; font-size: 0.8rem;">CORE UPGRADES</h3>
+            <div class="shop-card">
+                <span class="item-title">PAYLOAD_MULT (x<span id="mult-stat">1</span>)</span>
+                <div class="desc-text">Upgrades your manual keyboard uplink. Every character typed earns <span class="highlight">$<span id="payout-disp">1</span></span>.</div>
+                <button id="btn-mult" onclick="upgradeUser('mult')">UPGRADE ($<span id="mult-cost">250</span>)</button>
+            </div>
+            <div class="shop-card">
+                <span class="item-title">DATA_COMPRESSOR (LV <span id="bloat-stat">0</span>)</span>
+                <div class="desc-text">Trims the "bloat" from data strings. Makes sentences <span class="highlight">shorter</span> for faster manual resets.</div>
+                <button id="btn-bloat" onclick="upgradeUser('bloat')">UPGRADE ($<span id="bloat-cost">500</span>)</button>
+            </div>
+            <button onclick="resetGame()" style="background:#300; color:#f55; cursor:pointer; font-size:0.6rem; border:none; padding:5px;">FULL WIPE</button>
+        </div>
+    </div>
+
+    <div id="bot-rack"></div>
+
+    <div id="market-panel">
+        <h3 style="color:#00ff00; font-size: 0.8rem;">FLEET MARKETPLACE</h3>
+        <div id="bot-shop"></div>
+    </div>
+
+    <script>
+        const randomSentences = [
+            "The quick brown fox jumps over the lazy dog.", "Jupiter is the largest planet in our solar system.", "Bananas grow towards the sun to reach the light.", "A group of flamingos is called a flamboyance.", "Honey never spoils in ancient Egyptian tombs.", "Octopuses have three hearts and blue blood.", "The Eiffel Tower grows taller in the summer heat.", "Wombat poop is cube-shaped to stop it rolling."
+        ];
+        const dictionary = { A: "APPLE", B: "BALLOON", C: "CACTUS", D: "DRAGON", E: "EAGLE", F: "FOREST", G: "GALAXY", H: "HAMMER", I: "ISLAND", K: "KERNEL", M: "MOUNTAIN", P: "PIZZA", Q: "QUANTUM", R: "RIVER", S: "STORM", T: "TIGER", U: "UPLINK", W: "WOLF" };
+
+        let gameState = {
+            balance: 0,
+            userMult: 1,
+            userMultCost: 250,
+            bloatLevel: 0,
+            bloatCost: 500,
+            botLevels: [0, 0, 0, 0, 0, 0, 0, 0]
+        };
+
+        const botTypes = [
+            { name: "ALPHA", cost: 100, speed: 1000, type: 'char', sm: 0.85, cm: 1.5, info: "The starter unit. Submits <span class='highlight'>1 char</span> per tick. Low cost, steady growth." },
+            { name: "BETA", cost: 800, speed: 700, type: 'char', sm: 0.82, cm: 1.6, info: "Professional auto-typer. Substantially <span class='highlight'>lower latency</span> than the Alpha unit." },
+            { name: "GAMMA", cost: 3000, speed: 450, type: 'char', sm: 0.8, cm: 1.7, info: "The Overclocker. Rapid char submission. Built for <span class='highlight'>high-speed</span> data entry." },
+            { name: "PULSE", cost: 7500, speed: 300, type: 'char', sm: 0.78, cm: 1.75, info: "Advanced rhythmic typer. Bridges the gap between character and word-based bots." },
+            { name: "MINER", cost: 15000, speed: 600, type: 'miner', sm: 0.78, cm: 1.8, info: "Dual-Core Miner. Mines <span class='highlight'>2 characters</span> simultaneously for every tick cycle." },
+            { name: "DRILL", cost: 35000, speed: 300, type: 'heavy', sm: 0.75, cm: 2.0, info: "Deep-core mining drill. Extracts <span class='highlight'>$50 per character</span> using heavy-duty logic." },
+            { name: "CRUSHER", cost: 80000, speed: 2000, type: 'word', sm: 0.72, cm: 2.1, info: "Word-bypass engine. Submits an <span class='highlight'>entire word</span> every tick. Massive burst potential." },
+            { name: "ECHO", cost: 250000, speed: 30, type: 'echo', info: "Reactive Keystroke Interceptor. Multiplies YOUR typing value by <span class='highlight'>10x</span> via real-time logic." }
+        ];
+
+        let activeBots = [];
+        let player = { phrase: "", index: 0 };
+        let echoActive = false;
+
+        function saveGame() { localStorage.setItem('QuantumSave_V8', JSON.stringify(gameState)); }
+
+        function loadGame() {
+            const saved = localStorage.getItem('QuantumSave_V8');
+            if (saved) gameState = JSON.parse(saved);
+            activeBots = botTypes.map((b, i) => {
+                let lvl = gameState.botLevels[i] || 0;
+                let bot = { ...b, level: lvl, active: lvl > 0 };
+                bot.currentSpeed = b.speed * Math.pow(b.sm, Math.max(0, lvl - 1));
+                bot.speedCost = Math.floor(b.cost * 1.5 * Math.pow(b.cm, Math.max(0, lvl - 1)));
+                bot.phrase = ""; bot.index = 0;
+                return bot;
+            });
+            player.phrase = getPhrase();
+            updateUI();
+            activeBots.forEach((bot, i) => {
+                if(bot.active) {
+                    renderBotInRack(i);
+                    if(bot.type !== 'echo') startBotTimer(i);
+                    else { echoActive = true; setInterval(() => triggerEchoWord(Object.keys(dictionary)[Math.floor(Math.random()*15)]), 10000); }
+                }
+            });
+        }
+
+        function getPhrase() {
+            let p = randomSentences[Math.floor(Math.random()*randomSentences.length)];
+            if(gameState.bloatLevel > 0) {
+                let limit = Math.max(8, p.length - (gameState.bloatLevel * 10));
+                p = p.substring(0, limit) + (p.length > limit ? "..." : "");
+            }
+            return p;
+        }
+
+        function updateUI() {
+            document.getElementById('balance').innerText = `$${Math.floor(gameState.balance).toLocaleString()}`;
+            document.getElementById('mult-stat').innerText = gameState.userMult;
+            document.getElementById('payout-disp').innerText = gameState.userMult;
+            document.getElementById('mult-cost').innerText = Math.floor(gameState.userMultCost).toLocaleString();
+            document.getElementById('bloat-stat').innerText = gameState.bloatLevel;
+            document.getElementById('bloat-cost').innerText = Math.floor(gameState.bloatCost).toLocaleString();
+            document.getElementById('btn-mult').className = (gameState.balance >= gameState.userMultCost) ? 'can-afford' : '';
+            document.getElementById('btn-bloat').className = (gameState.balance >= gameState.bloatCost) ? 'can-afford' : '';
+            let phtml = "";
+            for(let i=0; i<player.phrase.length; i++) { phtml += `<span class="${i===player.index?'current':''}">${player.phrase[i]}</span>`; }
+            document.getElementById('user-active').innerHTML = phtml;
+            renderMarket();
+        }
+
+        function renderMarket() {
+            let mhtml = "";
+            activeBots.forEach((bot, i) => {
+                const cost = bot.active ? bot.speedCost : bot.cost;
+                const can = gameState.balance >= cost;
+                mhtml += `<div class="shop-card">
+                    <span class="item-title">${bot.name} ${bot.active?'[LV'+bot.level+']':''}</span>
+                    <div class="desc-text">${bot.info}</div>
+                    ${!bot.active ? `<button class="${can?'can-afford':''}" onclick="buyBot(${i})">PURCHASE ($${bot.cost.toLocaleString()})</button>` : (bot.type !== 'echo' ? `<button class="${can?'can-afford':''}" onclick="upgradeBot(${i})">OVERCLOCK ($${Math.floor(cost).toLocaleString()})</button>` : `<span style='color:cyan; font-size:0.7rem;'>ECHO LINK ONLINE</span>`)}
+                </div>`;
+            });
+            document.getElementById('bot-shop').innerHTML = mhtml;
+        }
+
+        function renderBotInRack(i) {
+            if(document.getElementById(`unit-${i}`)) return;
+            const rack = document.getElementById('bot-rack');
+            const div = document.createElement('div');
+            div.className = 'bot-unit active-unit'; div.id = `unit-${i}`;
+            const spdDisp = activeBots[i].type === 'echo' ? 'ULTRA' : Math.floor(activeBots[i].currentSpeed) + 'ms';
+            div.innerHTML = `<div class="bot-header"><span>${activeBots[i].name}</span><span class="live-speed-label" id="live-spd-${i}">SPD: ${spdDisp}</span></div><div class="bot-log" id="log-${i}">_</div>`;
+            rack.appendChild(div);
+        }
+
+        function buyBot(i) {
+            if(gameState.balance >= activeBots[i].cost) {
+                gameState.balance -= activeBots[i].cost;
+                activeBots[i].active = true; activeBots[i].level = 1;
+                activeBots[i].phrase = getPhrase();
+                gameState.botLevels[i] = 1;
+                renderBotInRack(i);
+                if(activeBots[i].type === 'echo') { echoActive = true; setInterval(() => triggerEchoWord(Object.keys(dictionary)[Math.floor(Math.random()*15)]), 10000); } 
+                else { startBotTimer(i); }
+                saveGame(); updateUI();
+            }
+        }
+
+        function upgradeBot(i) {
+            if(gameState.balance >= activeBots[i].speedCost) {
+                gameState.balance -= activeBots[i].speedCost;
+                activeBots[i].currentSpeed *= activeBots[i].sm;
+                activeBots[i].level++;
+                activeBots[i].speedCost *= activeBots[i].cm;
+                gameState.botLevels[i] = activeBots[i].level;
+                const liveLabel = document.getElementById(`live-spd-${i}`);
+                if(liveLabel) liveLabel.innerText = "SPD: " + Math.floor(activeBots[i].currentSpeed) + "ms";
+                startBotTimer(i); saveGame(); updateUI();
+            }
+        }
+
+        function upgradeUser(type) {
+            if(type==='mult' && gameState.balance >= gameState.userMultCost) { gameState.balance -= gameState.userMultCost; gameState.userMult++; gameState.userMultCost *= 2.8; }
+            if(type==='bloat' && gameState.balance >= gameState.bloatCost) { gameState.balance -= gameState.bloatCost; gameState.bloatLevel++; gameState.bloatCost *= 3.5; player.phrase = getPhrase(); player.index = 0; }
+            saveGame(); updateUI();
+        }
+
+        function triggerEchoWord(char) {
+            if(!echoActive) return;
+            const word = dictionary[char.toUpperCase()] || "APPLE";
+            let idx = 0;
+            const echoInt = setInterval(() => {
+                if(idx < word.length) { gameState.balance += 10; const log = document.getElementById('log-7'); if(log) log.innerText = "ECHO: " + word.substring(0, ++idx); } else { clearInterval(echoInt); }
+                updateUI();
+            }, 30);
+        }
+
+        function startBotTimer(i) {
+            const bot = activeBots[i]; if(bot.timer) clearInterval(bot.timer);
+            bot.timer = setInterval(() => {
+                let gain = 1;
+                if(bot.type === 'miner') { gain = 2; bot.index += 2; }
+                else if(bot.type === 'word') { let wm = bot.phrase.slice(bot.index).match(/^\S+\s*/); if(wm) { gain = wm[0].length; bot.index += gain; } }
+                else if(bot.type === 'heavy') { gain = 50; bot.index++; }
+                else { bot.index++; }
+                gameState.balance += gain;
+                if(bot.index >= bot.phrase.length) { bot.phrase = getPhrase(); bot.index = 0; }
+                const log = document.getElementById(`log-${i}`); if(log) log.innerText = bot.phrase.substring(0, bot.index);
+                updateUI();
+            }, Math.max(4, bot.currentSpeed));
+        }
+
+        function resetGame() { if(confirm("ERASE ALL PROGRESS?")) { localStorage.clear(); location.reload(); } }
+
+        window.addEventListener('keydown', (e) => {
+            if(e.key === " ") e.preventDefault();
+            if(e.key.length !== 1) return;
+            if(e.key.toUpperCase() === player.phrase[player.index].toUpperCase()) {
+                gameState.balance += gameState.userMult; triggerEchoWord(e.key); player.index++;
+                if(player.index >= player.phrase.length) { player.phrase = getPhrase(); player.index = 0; }
+                saveGame();
+            } else { gameState.balance = Math.max(0, gameState.balance - 1); }
+            updateUI();
+        });
+        loadGame();
+    </script>
+</body>
+</html>
